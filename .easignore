@@ -1,0 +1,37 @@
+# Node modules (EAS installs these itself)
+node_modules
+
+# Git repo and config
+.git
+.gitignore
+
+# Expo and VSCode config
+.expo
+.expo-shared/
+.vscode
+node_modules/
+
+# Build scripts and outputs
+scripts/
+*.log
+*.tmp
+
+# OS-specific files
+.DS_Store
+Thumbs.db
+
+# Test and debug artifacts
+*.test.*
+*.spec.*
+com.facebook.react.common.DebugServerException*
+
+# Sensitive or local config
+.env
+.env.*
+
+app/firebaseConfig.ts
+
+GoogleService-Info.plist
+
+# (Optional) Unused assets or large files not needed for build
+# assets/unused/

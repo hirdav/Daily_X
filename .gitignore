@@ -1,0 +1,49 @@
+# Node modules
+node_modules/
+
+# Expo
+.expo/
+.expo-shared/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+expo-debug.log*
+
+# Environment variables & secrets
+.env
+.env.*
+app/firebaseConfig.ts
+app/firebaseConfig.js
+app/FirebaseConfig.ts
+FirebaseConfig.ts
+package-lock.json
+# Firebase config files (do not track credentials)
+google-services.json
+GoogleService-Info.plist
+
+# Build output
+web-build/
+dist/
+build/
+*.apk
+*.aab
+*.ipa
+
+# IDE/editor settings
+.vscode/
+.idea/
+*.swp
+
+# Misc
+*.log
+
+app/services/googleAuthService.ts
+ARCHITECTURE.md
+
+app.json
