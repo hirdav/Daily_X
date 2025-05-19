@@ -79,6 +79,7 @@ const getLevelInfo = (totalPoints: number, taskCount: number = 0): LevelInfo => 
 const menuItems: MenuItem[] = [
   { name: 'Dashboard', icon: 'dashboard' },
   { name: 'ManageTasks', icon: 'list', label: 'Tasks' },
+  { name: 'Schedule', icon: 'event', label: 'Schedule' },
   { name: 'Journal', icon: 'book' },
   { name: 'History', icon: 'history' },
   // Analytics removed as requested
@@ -105,6 +106,7 @@ const [stats, setStats] = useState<UserStats>({
   level: 1,
   levelProgress: 0,
   nextLevelXP: 10,
+  weightedPoints: 0,
 });
 
 // XP loading state

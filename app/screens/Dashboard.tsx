@@ -23,7 +23,7 @@ import {
   onSnapshot,
 } from 'firebase/firestore';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { subscribeToTasks, Task, completeTask, updateTask, subscribeToUserStats, resetRecurringTasks } from '../utils/firebaseService';
+import { subscribeToTasks, Task as TaskType, completeTask, updateTask, subscribeToUserStats, resetRecurringTasks, SubTask, togglePinnedTask } from '../utils/firebaseService';
 import { formatDateString } from '../utils/dateUtils';
 import { Colors, Typography, Spacing } from '../styles/global';
 import Theme from '../styles/theme';
@@ -39,6 +39,9 @@ interface Stats {
   todayXP: number;
   xpProgress: number; // Percentage of daily XP earned (0-100)
 }
+
+// Use the Task interface with subtasks
+interface Task extends TaskType {}
 
 const Dashboard = () => {
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -195,8 +198,20 @@ const Dashboard = () => {
           return !!task.completed && !!task.lastCompletedDate && task.lastCompletedDate === todayStr;
         });
 
+        // Sort tasks to complete so pinned tasks appear first
+        const sortedTasksToComplete = [...tasksToComplete].sort((a, b) => {
+          // First sort by pinned status (pinned tasks first)
+          if (a.pinned && !b.pinned) return -1;
+          if (!a.pinned && b.pinned) return 1;
+          // Then sort by creation date (newest first) as a secondary sort
+          if (a.createdAt && b.createdAt) {
+            return b.createdAt.seconds - a.createdAt.seconds;
+          }
+          return 0;
+        });
+        
         // Combine or set state as needed (if you use setTasks for both, you may want to set both arrays in state)
-        setTasks([...tasksToComplete, ...completedTasks]);
+        setTasks([...sortedTasksToComplete, ...completedTasks]);
         // If you have separate state for each section, use setTasksToComplete(tasksToComplete) and setCompletedTasks(completedTasks)
 
         setTasks([...tasksToComplete, ...completedTasks]);
@@ -258,6 +273,19 @@ const Dashboard = () => {
     }
   };
 
+  // Handle toggling the pinned status of a task
+  const handleTogglePinned = async (taskId: string, currentPinned: boolean) => {
+    try {
+      const result = await togglePinnedTask(taskId);
+      if (!result.success) {
+        Alert.alert('Error', result.message || 'Failed to update pinned status');
+      }
+      // No need to manually update state as the subscription will handle it
+    } catch (error) {
+      Alert.alert('Error', 'Failed to update pinned status');
+    }
+  };
+
   const renderTaskSection = (title: string, filteredTasks: Task[]) => (
     <View style={styles.section}>
       <Text style={Theme.Typography.h3}>{title}</Text>
@@ -265,13 +293,36 @@ const Dashboard = () => {
         filteredTasks.map((task) => (
           <TouchableOpacity
             key={task.id}
-            style={[Theme.ComponentStyles.card, task.completed && styles.completedTaskCard]}
+            style={[
+              Theme.ComponentStyles.card, 
+              task.completed && styles.completedTaskCard,
+              task.pinned && !task.completed && styles.pinnedTaskCard
+            ]}
             onPress={() => !task.completed && handleTaskCompletion(task.id)}
           >
             <View style={[Theme.ComponentStyles.spaceBetween, {flexWrap: 'wrap'}]}>
               <View style={[Theme.ComponentStyles.row, {flex: 1, minWidth: '70%', marginRight: Theme.Spacing.sm}]}>
                 <Text style={styles.taskEmoji}>{task.emoji}</Text>
-                <Text style={[Theme.Typography.h4, {flex: 1, marginLeft: Theme.Spacing.sm}]}>{task.title}</Text>
+                <View style={{flex: 1, marginLeft: Theme.Spacing.sm}}>
+                  <View style={[Theme.ComponentStyles.row, {alignItems: 'center'}]}>
+                    <Text style={[Theme.Typography.h4, {flex: 1}]}>{task.title}</Text>
+                    {!task.completed && (
+                      <TouchableOpacity 
+                        style={styles.pinButton}
+                        onPress={() => handleTogglePinned(task.id, !!task.pinned)}
+                      >
+                        <MaterialIcons 
+                          name={task.pinned ? "star" : "star-outline"} 
+                          size={24} 
+                          color={task.pinned ? Theme.Colors.warning : Theme.Colors.textSecondary} 
+                        />
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                  {task.pinned && !task.completed && (
+                    <Text style={styles.pinnedLabel}>Pinned</Text>
+                  )}
+                </View>
               </View>
               <View style={[styles.xpBadge, {backgroundColor: task.completed ? Theme.Colors.success + '30' : Theme.Colors.primary + '30', marginTop: Theme.Spacing.xs}]}>
                 <Text style={[Theme.Typography.bodySmall, {color: task.completed ? Theme.Colors.success : Theme.Colors.primary, fontWeight: '600'}]}>
@@ -286,6 +337,31 @@ const Dashboard = () => {
             {task.description ? (
               <Text style={[Theme.Typography.body, {marginTop: Theme.Spacing.sm}]}>{task.description}</Text>
             ) : null}
+            
+            {/* Subtasks section */}
+            {task.subtasks && task.subtasks.length > 0 && (
+              <View style={{marginTop: Theme.Spacing.sm, borderTopWidth: 1, borderTopColor: Theme.Colors.borderLight, paddingTop: Theme.Spacing.sm}}>
+                <Text style={[Theme.Typography.bodySmall, {fontWeight: '600', marginBottom: Theme.Spacing.xs}]}>
+                  Subtasks ({task.subtasks.length})
+                </Text>
+                {task.subtasks.map((subtask, index) => (
+                  <View key={subtask.id} style={[Theme.ComponentStyles.row, {marginBottom: index === (task.subtasks?.length || 0) - 1 ? 0 : Theme.Spacing.xs, alignItems: 'center'}]}>
+                    <MaterialIcons 
+                      name={subtask.completed ? "check-circle" : "radio-button-unchecked"} 
+                      size={16} 
+                      color={subtask.completed ? Theme.Colors.success : Theme.Colors.textSecondary} 
+                      style={{marginRight: Theme.Spacing.xs}}
+                    />
+                    <Text style={[Theme.Typography.bodySmall, {
+                      color: Theme.Colors.textSecondary,
+                      textDecorationLine: subtask.completed ? 'line-through' : 'none'
+                    }]}>
+                      {subtask.title}
+                    </Text>
+                  </View>
+                ))}
+              </View>
+            )}
             
             {task.completed && task.completedAt && (
               <View style={{marginTop: Theme.Spacing.sm, paddingTop: Theme.Spacing.sm, borderTopWidth: 1, borderTopColor: Theme.Colors.borderLight}}>
@@ -352,10 +428,30 @@ const styles = StyleSheet.create({
     borderLeftWidth: 4,
     borderLeftColor: Theme.Colors.success,
   },
+  pinnedTaskCard: {
+    borderLeftWidth: 4,
+    borderLeftColor: Theme.Colors.warning,
+    borderTopWidth: 1,
+    borderTopColor: Theme.Colors.warning,
+    borderRightWidth: 1,
+    borderRightColor: Theme.Colors.warning,
+    borderBottomWidth: 1,
+    borderBottomColor: Theme.Colors.warning,
+  },
+  pinButton: {
+    padding: 8,
+    marginLeft: 8,
+  },
+  pinnedLabel: {
+    fontSize: 12,
+    color: Theme.Colors.warning,
+    fontWeight: 'bold',
+    marginTop: 2,
+  },
   xpBadge: {
-    paddingHorizontal: Theme.Spacing.sm,
-    paddingVertical: Theme.Spacing.xs,
-    borderRadius: Theme.Layout.radiusSm,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 4,
     alignSelf: 'flex-start',
   },
   content: {
@@ -371,8 +467,8 @@ const styles = StyleSheet.create({
   },
   welcomeText: {
     fontSize: 14,
-    color: Colors.textSecondary,
-    marginTop: 2,
+    color: Theme.Colors.textSecondary,
+    marginTop: -5,
   },
 });
 

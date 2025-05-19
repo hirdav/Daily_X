@@ -11,6 +11,7 @@ export type RootStackParamList = {
   Settings_new: undefined;
   ManageTasks: undefined;
   Journal: undefined;
+  Schedule: undefined;
   // Add more screens as needed
   [key: string]: undefined | object | NavigatorScreenParams<any>;
 };

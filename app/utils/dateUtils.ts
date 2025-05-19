@@ -2,11 +2,20 @@ import { Timestamp } from 'firebase/firestore';
 
 /**
  * Formats a Date object as YYYY-MM-DD string
+ * Uses UTC to avoid timezone issues
  * @param date Date object to format
  * @returns Formatted date string
  */
 export const formatDateString = (date: Date): string => {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+  // Create a new date at noon UTC to avoid timezone issues
+  const utcDate = new Date(Date.UTC(
+    date.getFullYear(),
+    date.getMonth(),
+    date.getDate(),
+    12, 0, 0
+  ));
+  
+  return `${utcDate.getUTCFullYear()}-${String(utcDate.getUTCMonth() + 1).padStart(2, '0')}-${String(utcDate.getUTCDate()).padStart(2, '0')}`;
 };
 
 /**
@@ -94,16 +103,25 @@ export const getDaysBetween = (start: Date, end: Date): number => {
 
 /**
  * Gets an array of date strings for the past n days
+ * Uses UTC to avoid timezone issues
  * @param days Number of days to include
  * @returns Array of date strings in YYYY-MM-DD format
  */
 export const getPastDaysDateStrings = (days: number): string[] => {
   const dates: string[] = [];
-  const today = new Date();
+  // Create today at noon UTC to avoid timezone issues
+  const now = new Date();
+  const today = new Date(Date.UTC(
+    now.getFullYear(),
+    now.getMonth(),
+    now.getDate(),
+    12, 0, 0
+  ));
   
   for (let i = 0; i < days; i++) {
+    // Create a new UTC date for each day
     const date = new Date(today);
-    date.setDate(today.getDate() - i);
+    date.setUTCDate(today.getUTCDate() - i);
     dates.push(formatDateString(date));
   }
   

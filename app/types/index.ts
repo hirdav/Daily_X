@@ -19,7 +19,17 @@ export interface Task {
   lastSyncAttempt?: number;
   recurring?: boolean;
   lastCompletedDate?: string | null;
+  pinned?: boolean; // Flag to indicate if the task is pinned to the top of the dashboard
   adjustmentReason?: string;
+  subtasks?: SubTask[]; // Array of subtasks
+}
+
+// Interface for subtasks
+export interface SubTask {
+  id: string;
+  title: string;
+  completed: boolean;
+  completedAt?: Timestamp | null;
 }
 
 export interface JournalEntry {

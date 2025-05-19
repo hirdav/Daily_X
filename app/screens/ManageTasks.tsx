@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import debounce from 'lodash.debounce';
 import {
   View,
   Text,
@@ -46,6 +47,14 @@ interface Task {
   archivedDate?: string;
   archivedAt?: any; // Timestamp
   creationDate?: string; // ISO string for creation date
+  subtasks?: SubTask[];
+}
+
+interface SubTask {
+  id: string;
+  title: string;
+  completed: boolean;
+  completedAt?: any; // Timestamp
 }
 
 const XP_CAP = 100; // Maximum total XP allowed
@@ -61,6 +70,8 @@ const ManageTasks = () => {
   const [recurring, setRecurring] = useState(false);
   const [totalXP, setTotalXP] = useState(0);
   const [availableXP, setAvailableXP] = useState(XP_CAP);
+  const [subtasks, setSubtasks] = useState<SubTask[]>([]);
+  const [newSubtaskTitle, setNewSubtaskTitle] = useState('');
 
   const navigation = useNavigation();
   const user = FIREBASE_AUTH.currentUser;
@@ -306,15 +317,82 @@ const ManageTasks = () => {
     setXp('');
     setRecurring(false);
     setEditingTask(null);
+    setSubtasks([]);
+    setNewSubtaskTitle('');
+  };
+
+  const MAX_SUBTASKS = 10;
+
+  const MAX_SUBTASK_CHARS = 50;
+
+  // Create a ref to track if a task submission is in progress
+  const isSubmitting = useRef(false);
+
+  const handleAddSubtask = () => {
+    if (newSubtaskTitle.trim() === '') return;
+    
+    // Check if the subtask title exceeds the character limit
+    if (newSubtaskTitle.trim().length > MAX_SUBTASK_CHARS) {
+      Alert.alert(
+        'Character Limit Exceeded',
+        `Subtask titles cannot exceed ${MAX_SUBTASK_CHARS} characters.`,
+        [{ text: 'OK' }]
+      );
+      return;
+    }
+    
+    // Check if we've reached the maximum number of subtasks
+    if (subtasks.length >= MAX_SUBTASKS) {
+      Alert.alert(
+        'Subtask Limit Reached',
+        `You can only add up to ${MAX_SUBTASKS} subtasks per task.`,
+        [{ text: 'OK' }]
+      );
+      return;
+    }
+    
+    const newSubtask: SubTask = {
+      id: `subtask_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
+      title: newSubtaskTitle.trim(),
+      completed: false,
+    };
+    
+    setSubtasks([...subtasks, newSubtask]);
+    setNewSubtaskTitle('');
+  };
+
+  // Create a debounced version of the subtask addition function to prevent rapid clicks
+  const debouncedAddSubtask = useCallback(
+    debounce(() => {
+      handleAddSubtask();
+    }, 300),
+    [handleAddSubtask]
+  );
+
+  const handleRemoveSubtask = (id: string) => {
+    setSubtasks(subtasks.filter(subtask => subtask.id !== id));
   };
 
   const handleAddTask = async () => {
-    if (!user) return;
+    // Prevent duplicate submissions
+    if (isSubmitting.current) return;
+    isSubmitting.current = true;
+    
+    // Set a timeout to reset the flag after a reasonable delay
+    setTimeout(() => {
+      isSubmitting.current = false;
+    }, 2000);
+    
+    if (!user) {
+      isSubmitting.current = false;
+      return;
+    }
 
     try {
       const xpNumber = parseInt(xp);
       if (isNaN(xpNumber) || xpNumber <= 0) {
         Alert.alert('Error', 'XP must be a positive number');
+        isSubmitting.current = false;
         return;
       }
       
@@ -336,6 +414,7 @@ const ManageTasks = () => {
           `The total XP cannot exceed ${XP_CAP}. You have ${XP_CAP - (totalXP - (editingTask ? editingTask.xp : 0))} XP available.`,
           [{ text: 'OK' }]
         );
+        isSubmitting.current = false;
         return;
       }
 
@@ -345,21 +424,15 @@ const ManageTasks = () => {
         emoji,
         xp: xpNumber,
         recurring,
+        subtasks: subtasks.length > 0 ? subtasks : undefined,
       };
 
       if (editingTask) {
         // Update existing task
-        const taskData = {
-          title,
-          description,
-          emoji,
-          xp: xpNumber,
-          recurring,
-        };
-        // Pass taskId and taskData as separate parameters
         const result = await updateTask(editingTask.id, taskData);
         if (!result.success) {
           Alert.alert('Error', result.message || 'Failed to update task');
+          isSubmitting.current = false;
           return;
         }
         if (result.message !== 'Task updated successfully') {
@@ -376,6 +449,7 @@ const ManageTasks = () => {
         const result = await addTask(taskDataWithCreation);
         if (!result.success) {
           Alert.alert('Error', result.message || 'Failed to add task');
+          isSubmitting.current = false;
           return;
         }
         if (result.message && recurring) {
@@ -385,11 +459,21 @@ const ManageTasks = () => {
       clearForm();
       setModalVisible(false);
       fetchTasks();
+      isSubmitting.current = false;
     } catch (error) {
       // Logging removed for production ('Error saving task:', error);
       Alert.alert('Error', 'Failed to save task');
+      isSubmitting.current = false;
     }
   };
+  
+  // Create a debounced version of the task creation/update function
+  const debouncedAddTask = useCallback(
+    debounce(() => {
+      handleAddTask();
+    }, 800),
+    [handleAddTask]
+  );
 
 
   const openEditModal = (task: Task) => {
@@ -399,6 +483,7 @@ const ManageTasks = () => {
     setEmoji(task.emoji);
     setXp(task.xp.toString());
     setRecurring(task.recurring || false);
+    setSubtasks(task.subtasks || []);
     setModalVisible(true);
   };
 
@@ -614,6 +699,22 @@ const ManageTasks = () => {
               </Text>
             ) : null}
             
+            {/* Subtasks section */}
+            {task.subtasks && task.subtasks.length > 0 && (
+              <View style={{marginTop: Theme.Spacing.sm, borderTopWidth: 1, borderTopColor: Theme.Colors.borderLight, paddingTop: Theme.Spacing.sm}}>
+                <Text style={[Theme.Typography.bodySmall, {fontWeight: '600', marginBottom: Theme.Spacing.xs}]}>
+                  Subtasks ({task.subtasks.length})
+                </Text>
+                {task.subtasks.map((subtask, index) => (
+                  <View key={subtask.id} style={[Theme.ComponentStyles.row, {marginBottom: index === (task.subtasks?.length || 0) - 1 ? 0 : Theme.Spacing.xs, alignItems: 'center'}]}>
+                    <Text style={[Theme.Typography.bodySmall, {color: Theme.Colors.textSecondary}]}>
+                      • {subtask.title}
+                    </Text>
+                  </View>
+                ))}
+              </View>
+            )}
+            
             <View style={[styles.taskActions, {marginTop: Theme.Spacing.md, borderTopWidth: 1, borderTopColor: Theme.Colors.borderLight, paddingTop: Theme.Spacing.sm, justifyContent: 'flex-end', flexDirection: 'row'}]}>
               {task.recurring && (
                 <TouchableOpacity
@@ -724,6 +825,61 @@ const ManageTasks = () => {
               />
             </View>
             
+            {/* Subtasks Section */}
+            <View style={Theme.ComponentStyles.formGroup}>
+              <Text style={Theme.ComponentStyles.formLabel}>Subtasks</Text>
+              
+              {/* List of existing subtasks */}
+              {subtasks.map((subtask, index) => (
+                <View key={subtask.id} style={[Theme.ComponentStyles.row, {marginBottom: Theme.Spacing.sm, alignItems: 'center'}]}>
+                  <Text style={{flex: 1, color: Theme.Colors.text}}>
+                    {index + 1}. {subtask.title}
+                  </Text>
+                  <TouchableOpacity
+                    onPress={() => handleRemoveSubtask(subtask.id)}
+                    style={{padding: 5}}
+                  >
+                    <MaterialIcons name="close" size={20} color={Theme.Colors.error} />
+                  </TouchableOpacity>
+                </View>
+              ))}
+              
+              {/* Add new subtask input */}
+              <View style={[Theme.ComponentStyles.row, {marginTop: Theme.Spacing.xs}]}>
+                <View style={{flex: 1, marginRight: Theme.Spacing.sm}}>
+                  <TextInput
+                    style={[Theme.ComponentStyles.input]}
+                    placeholder="Add a subtask"
+                    value={newSubtaskTitle}
+                    onChangeText={setNewSubtaskTitle}
+                    onSubmitEditing={handleAddSubtask}
+                    maxLength={MAX_SUBTASK_CHARS}
+                  />
+                  <Text style={[Theme.Typography.caption, {
+                    textAlign: 'right', 
+                    marginTop: 2,
+                    color: newSubtaskTitle.length > MAX_SUBTASK_CHARS * 0.8 ? Theme.Colors.warning : Theme.Colors.textSecondary
+                  }]}>
+                    {newSubtaskTitle.length}/{MAX_SUBTASK_CHARS}
+                  </Text>
+                </View>
+                <TouchableOpacity
+                  style={[Theme.ComponentStyles.buttonPrimary, 
+                    {paddingHorizontal: Theme.Spacing.md},
+                    subtasks.length >= MAX_SUBTASKS && {opacity: 0.5}
+                  ]}
+                  onPress={debouncedAddSubtask}
+                  disabled={subtasks.length >= MAX_SUBTASKS}
+                >
+                  <Text style={Theme.ComponentStyles.buttonText}>Add</Text>
+                </TouchableOpacity>
+              </View>
+              
+              <Text style={[Theme.Typography.caption, {color: Theme.Colors.info, marginTop: Theme.Spacing.xs}]}>
+                {subtasks.length} of {MAX_SUBTASKS} subtasks added {subtasks.length === MAX_SUBTASKS ? '(limit reached)' : ''}
+              </Text>
+            </View>
+            
             <View style={[Theme.ComponentStyles.formGroup, Theme.ComponentStyles.row, {justifyContent: 'space-between'}]}>
               <Text style={Theme.ComponentStyles.formLabel}>Recurring Daily Task</Text>
               <TouchableOpacity 
@@ -752,7 +908,7 @@ const ManageTasks = () => {
               </TouchableOpacity>
               <TouchableOpacity
                 style={[Theme.ComponentStyles.buttonPrimary, {flex: 1, marginLeft: Theme.Spacing.sm}]}
-                onPress={handleAddTask}
+                onPress={debouncedAddTask}
               >
                 <Text style={Theme.ComponentStyles.buttonText}>
                   {editingTask ? 'Update' : 'Add'}

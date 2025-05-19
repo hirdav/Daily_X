@@ -23,7 +23,7 @@ import {
 } from 'firebase/firestore';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { FIREBASE_DB, FIREBASE_AUTH } from '../../FirebaseConfig';
-import { JournalEntry, UserStats, DailyStats as DailyStatsType, Task as TaskType } from '../types';
+import { JournalEntry, UserStats, DailyStats as DailyStatsType, Task as TaskType, SubTask } from '../types';
 
 // Extended Task interface to include category, emoji, XP adjustment, recurring tasks, and offline support properties
 export interface Task extends TaskType {
@@ -34,6 +34,9 @@ export interface Task extends TaskType {
 export interface DailyStats extends DailyStatsType {
   // All properties are already defined in DailyStatsType
 }
+
+// Export SubTask interface for use in other files
+export { SubTask } from '../types';
 
 // Keep this for backward compatibility
 export interface Task {
@@ -55,8 +58,10 @@ export interface Task {
   lastSyncAttempt?: number; // Timestamp of the last sync attempt
   recurring?: boolean; // Flag to indicate if the task should recur daily
   lastCompletedDate?: string | null; // The date when the task was last completed (YYYY-MM-DD format)
+  pinned?: boolean; // Flag to indicate if the task is pinned to the top of the dashboard
   adjustmentReason?: string; // Reason why XP was adjusted
   archived?: boolean; // Flag to indicate if the task has been archived
+  subtasks?: SubTask[]; // Array of subtasks
 }
 import { formatDateString, dateToTimestamp } from './dateUtils';
 import { arrayUnion, arrayRemove } from 'firebase/firestore';
@@ -188,11 +193,23 @@ export const resetRecurringTasks = async (): Promise<{ success: boolean; message
       
       if (shouldReset) {
         // Reset the task to be available for today
-        batch.update(docSnapshot.ref, {
+        const updateData: any = {
           completed: false,
           completedAt: null,
           // Don't update lastCompletedDate here to preserve streak tracking
-        });
+        };
+        
+        // If the task has subtasks, reset their completion status too
+        if (task.subtasks && task.subtasks.length > 0) {
+          const resetSubtasks = task.subtasks.map(subtask => ({
+            ...subtask,
+            completed: false,
+            completedAt: null
+          }));
+          updateData.subtasks = resetSubtasks;
+        }
+        
+        batch.update(docSnapshot.ref, updateData);
         
         // Only update the legacy collection if we're not disabling legacy access
         if (!DISABLE_LEGACY_TASKS_ACCESS) {
@@ -646,6 +663,30 @@ export const updateTask = async (taskId: string, updates: Partial<Omit<Task, 'id
     // This ensures completed tasks remain visible for the rest of the day and are only removed the next day.
     // (No action needed here; retain lastCompletedDate as is.)
     
+    // Handle subtasks for completed tasks
+    // If the task is completed and we're adding/updating subtasks, mark all new subtasks as completed
+    if (task.completed && updates.subtasks) {
+      const currentSubtaskIds = new Set((task.subtasks || []).map(st => st.id));
+      const updatedSubtasks = updates.subtasks.map(subtask => {
+        // If this is a new subtask (not in the original task) and the parent task is completed,
+        // automatically mark it as completed for consistency
+        if (!currentSubtaskIds.has(subtask.id)) {
+          // Create a properly typed subtask with completed status
+          const completedSubtask: SubTask = {
+            id: subtask.id,
+            title: subtask.title,
+            completed: true,
+            // Use the parent task's completedAt timestamp if available
+            completedAt: task.completedAt || null
+          };
+          return completedSubtask;
+        }
+        return subtask;
+      });
+      
+      updates.subtasks = updatedSubtasks;
+    }
+    
     // Use a batch write to ensure consistency across all collections
     const batch = writeBatch(FIREBASE_DB);
     
@@ -969,7 +1010,8 @@ export const completeTask = async (
       title: task.title || '',
       description: task.description || '',
       category: task.category || 'uncategorized',
-      xp: task.xp || 0
+      xp: task.xp || 0,
+      subtasks: task.subtasks || []
     };
     
     // Calculate current daily XP (for reference only)
@@ -998,11 +1040,25 @@ export const completeTask = async (
     const adjustmentReason = null;
     const originalXp = plannedXp; // For backward compatibility
     
+    // Create the completion timestamp
+    const completionTimestamp = dateToTimestamp(now);
+    
+    // Handle subtasks - mark all subtasks as completed
+    let updatedSubtasks = task.subtasks;
+    if (task.subtasks && task.subtasks.length > 0) {
+      updatedSubtasks = task.subtasks.map(subtask => ({
+        ...subtask,
+        completed: true,
+        completedAt: completionTimestamp
+      }));
+    }
+    
     // Update task in both collections with completion status
     const completionData: any = {
       completed: true,
-      completedAt: dateToTimestamp(now),
+      completedAt: completionTimestamp,
       lastCompletedDate: dateStr, // Track the date when the task was last completed
+      subtasks: updatedSubtasks
     };
     
     // Update the task with execution layer data
@@ -1820,6 +1876,86 @@ export const modifyTaskXP = async (
     };
   }
 };
+
+/**
+ * Toggle the pinned status of a task
+ * 
+ * This function toggles whether a task is pinned to the top of the dashboard
+ * Pinned tasks will always appear at the top of the "Tasks to Complete" section
+ * 
+ * @param taskId - The ID of the task to toggle pinned status
+ * @returns Promise with success status and message
+ */
+export async function togglePinnedTask(
+  taskId: string
+): Promise<{ success: boolean; message?: string }> {
+  try {
+    // Get the current user ID
+    const userId = getCurrentUserId();
+    
+    // Get the device ID for tracking
+    const deviceId = await getDeviceId();
+    
+    // Get the task document reference
+    const taskRef = doc(FIREBASE_DB, 'users', userId, 'tasks', taskId);
+    
+    // Get the current task data
+    const taskDoc = await getDoc(taskRef);
+    if (!taskDoc.exists()) {
+      return { success: false, message: 'Task not found' };
+    }
+    
+    const task = taskDoc.data() as Task;
+    const currentPinnedStatus = task.pinned || false;
+    const newPinnedStatus = !currentPinnedStatus;
+    
+    // Create a batch for consistent updates
+    const batch = writeBatch(FIREBASE_DB);
+    
+    // Update the task with the new pinned status
+    batch.update(taskRef, {
+      pinned: newPinnedStatus
+    });
+    
+    // Add a history record for this action
+    const historyRef = doc(collection(FIREBASE_DB, 'users', userId, 'taskHistory'));
+    
+    // Create history record with only required fields
+    const historyRecord: any = {
+      id: historyRef.id,
+      taskId,
+      title: task.title,
+      xp: task.xp,
+      date: formatDateString(new Date()),
+      userId,
+      action: 'updated',
+      previousState: { pinned: currentPinnedStatus },
+      updates: { pinned: newPinnedStatus },
+      deviceId,
+      timestamp: serverTimestamp()
+    };
+    
+    // Add optional fields only if they exist in the task
+    if (task.description) historyRecord.description = task.description;
+    if (task.category) historyRecord.category = task.category;
+    if (task.completedAt) historyRecord.completedAt = task.completedAt;
+    if (task.recurring !== undefined) historyRecord.recurring = task.recurring;
+    
+    batch.set(historyRef, historyRecord);
+    
+    // Commit the batch
+    await batch.commit();
+    
+    return { 
+      success: true, 
+      message: newPinnedStatus ? 'Task pinned successfully' : 'Task unpinned successfully'
+    };
+  } catch (error) {
+    // Log the error for debugging
+    console.error('Error toggling pinned status:', error);
+    return { success: false, message: 'Failed to toggle pinned status' };
+  }
+}
 
 // ===== ANALYTICS & HISTORY =====
 
